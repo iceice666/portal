@@ -1,7 +1,6 @@
+use log::debug;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::Duration;
-
-use log::debug;
 use tracing::instrument;
 
 type AnyResult<T = ()> = anyhow::Result<T>;
@@ -64,12 +63,14 @@ impl Sender {
     }
 }
 
+#[derive(Debug)]
 pub struct Listener {
     socket: UdpSocket,
 }
 
 impl Listener {
     #[instrument]
+    /// listening_port should be the same as the broadcast_port in the Sender.
     pub fn new(listening_port: u16) -> AnyResult<Self> {
         let socket = UdpSocket::bind(format!("0.0.0.0:{}", listening_port))?;
         socket.set_broadcast(true)?;
@@ -80,7 +81,7 @@ impl Listener {
     }
 
     #[instrument(skip(self))]
-    fn recv_one(&self) -> AnyResult<SocketAddr> {
+    pub fn recv_once(&self) -> AnyResult<SocketAddr> {
         let mut buffer = [0; 1024];
 
         loop {
@@ -118,7 +119,7 @@ mod test {
             std::thread::spawn(move || sender.send_loop(std::time::Duration::from_secs(1)));
 
         sleep(Duration::from_secs(5));
-        let addr = listener.recv_one()?;
+        let addr = listener.recv_once()?;
         assert_eq!(addr.port(), service_port);
 
         Ok(())
