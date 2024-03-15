@@ -26,5 +26,6 @@
 //!               || ==========================> || Save file
 
 mod broadcast;
+mod codec;
 mod frame;
 mod master;
