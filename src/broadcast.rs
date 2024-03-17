@@ -3,6 +3,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::Duration;
 use tracing::instrument;
 
+use crate::utils::{u16_to_u8_array, u8_array_to_u16};
+
 type AnyResult<T = ()> = anyhow::Result<T>;
 
 const MAGIC: [u8; 7] = [0xb, 0x2d, 0xe, 0x13, 0x13, 0x8, 0xa];
@@ -11,18 +13,6 @@ pub struct Sender {
     socket: UdpSocket,
     payload: Vec<u8>,
     broadcast_addr: SocketAddr,
-}
-
-fn u16_to_u8_array(x: u16) -> [u8; 2] {
-    let b1: u8 = (x >> 8) as u8;
-    let b2: u8 = x as u8;
-    [b1, b2]
-}
-
-fn u8_array_to_u16(array: &[u8]) -> u16 {
-    let upper: u16 = (array[0] as u16) << 8;
-    let lower: u16 = array[1] as u16;
-    upper | lower
 }
 
 impl Sender {
@@ -89,7 +79,7 @@ impl Listener {
             debug!("Received broadcast from {}", source.ip(),);
 
             if buffer[0..7] == MAGIC {
-                let port = u8_array_to_u16(&buffer[7..9]);
+                let port = u8_array_to_u16([buffer[7], buffer[8]]);
                 debug!("Received correct message.");
                 debug!("Remote service at {}:{}", source.ip(), port);
 
