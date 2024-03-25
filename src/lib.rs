@@ -9,7 +9,7 @@
 //!   ip and port ||                             ||
 //!               ||                             ||
 //!               || Tcp connection              ||
-//!               || ==========================> || Allow this connection
+//!               || ==========================> || connected!
 //!               ||                             ||
 //!               ||                             ||
 //!               || Sending data ...            ||
@@ -20,12 +20,11 @@
 //!               ||                             ||
 //!               ||                             ||
 //!               || End signal                  ||
-//!               || ==========================> || Merge temp data
+//!               || ==========================> || Merge data
 //!               ||                             ||
-//!               || Send metadata               ||
-//!               || ==========================> || Save file
 
 mod broadcast;
 mod frame;
+mod master;
 mod side;
 mod utils;
