@@ -1,6 +1,5 @@
 type AnyResult<T = ()> = anyhow::Result<T>;
 
-use anyhow::anyhow;
 use bytes::{BufMut, BytesMut};
 use portal_macro::derive_conversion;
 use serde::{Deserialize, Serialize};
@@ -58,14 +57,12 @@ derive_conversion!(
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Request {
     kind: RequestKind,
-    content_length: u16,
     content: Vec<u8>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Response {
     kind: ResponseKind,
-    content_length: u16,
     content: Vec<u8>,
 }
 
@@ -75,8 +72,11 @@ pub struct ResponseCodec;
 pub struct RequestCodec;
 
 /// The MTU is 1500 bytes.
-/// And since the length of the content is stored in a u16,
-/// so the maximum length of the content is 1498 bytes.
+/// Frame format:
+/// |           Max is 1500 bytes           |
+/// |              |    Warped by struct    |
+/// | Total Length |  Kind  |    Content    |
+/// |    2 bytes   | 1 byte |    n bytes    |
 const MAX_CONTENT_LENGTH: usize = 1498;
 
 impl codec::Encoder<Response> for ResponseCodec {
@@ -84,7 +84,6 @@ impl codec::Encoder<Response> for ResponseCodec {
 
     fn encode(&mut self, item: Response, dst: &mut BytesMut) -> Result<(), ErrorKind> {
         let data = bincode::serialize(&item).map_err(ErrorKind::Bincode)?;
-        let data = data.as_slice();
         let data_len = data.len();
 
         if data_len > MAX_CONTENT_LENGTH {
@@ -94,8 +93,8 @@ impl codec::Encoder<Response> for ResponseCodec {
         let data_len = 2 + data_len;
 
         dst.reserve(data_len);
-        dst.put_u16(data_len as u16);
-        dst.extend_from_slice(data);
+        dst.put_u16(data_len as u16); // 2 bytes
+        dst.extend_from_slice(data.as_slice()); // struct
         Ok(())
     }
 }
@@ -105,7 +104,6 @@ impl codec::Encoder<Request> for RequestCodec {
 
     fn encode(&mut self, item: Request, dst: &mut BytesMut) -> Result<(), ErrorKind> {
         let data = bincode::serialize(&item).map_err(ErrorKind::Bincode)?;
-        let data = data.as_slice();
         let data_len = data.len();
 
         if data_len > MAX_CONTENT_LENGTH {
@@ -115,8 +113,8 @@ impl codec::Encoder<Request> for RequestCodec {
         let data_len = 2 + data_len;
 
         dst.reserve(data_len);
-        dst.put_u16(data_len as u16);
-        dst.extend_from_slice(data);
+        dst.put_u16(data_len as u16); // 2 bytes
+        dst.extend_from_slice(data.as_slice()); // struct
         Ok(())
     }
 }
@@ -129,14 +127,15 @@ impl codec::Decoder for ResponseCodec {
         if src.len() < 2 {
             return Ok(None);
         }
-        let content_length = u8_array_to_u16([src[0], src[1]]) as usize;
+
+        let total_length = u8_array_to_u16([src[0], src[1]]) as usize;
         let buf_len = src.len();
-        if buf_len < content_length + 2 {
-            src.reserve(content_length + 2 - buf_len);
+        if buf_len < total_length {
+            src.reserve(total_length - buf_len);
             return Ok(None);
         }
 
-        let serialized = src.split_to(content_length + 2);
+        let serialized = src.split_to(total_length);
         let response = bincode::deserialize(&serialized[2..]).map_err(ErrorKind::Bincode)?;
         Ok(Some(response))
     }
@@ -151,14 +150,14 @@ impl codec::Decoder for RequestCodec {
             return Ok(None);
         }
 
-        let content_length = u8_array_to_u16([src[0], src[1]]) as usize;
+        let total_length = u8_array_to_u16([src[0], src[1]]) as usize;
         let buf_len = src.len();
-        if buf_len < content_length + 2 {
-            src.reserve(content_length + 2 - buf_len);
+        if buf_len < total_length {
+            src.reserve(total_length - buf_len);
             return Ok(None);
         }
 
-        let serialized = src.split_to(content_length + 2);
+        let serialized = src.split_to(total_length);
         let request = bincode::deserialize(&serialized[2..]).map_err(ErrorKind::Bincode)?;
         Ok(Some(request))
     }
