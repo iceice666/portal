@@ -24,7 +24,6 @@
 //!               ||                             ||
 
 mod broadcast;
-mod frame;
 mod master;
 mod side;
 mod utils;
