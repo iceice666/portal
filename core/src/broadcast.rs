@@ -1,11 +1,10 @@
 use log::debug;
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::Duration;
 use tracing::instrument;
 
 use crate::utils::{u16_to_u8_array, u8_array_to_u16};
-
-type AnyResult<T = ()> = anyhow::Result<T>;
 
 const MAGIC: [u8; 7] = [0xb, 0x2d, 0xe, 0x13, 0x13, 0x8, 0xa];
 
@@ -16,7 +15,7 @@ pub struct Sender {
 }
 
 impl Sender {
-    pub fn new(service_port: u16, broadcast_port: u16) -> AnyResult<Self> {
+    pub fn new(service_port: u16, broadcast_port: u16) -> io::Result<Self> {
         let socket: UdpSocket = UdpSocket::bind("0.0.0.0:0")?;
 
         socket.set_broadcast(true)?;
@@ -37,7 +36,7 @@ impl Sender {
         })
     }
 
-    pub fn send_loop(&self, period: Duration) -> AnyResult<()> {
+    pub fn send_loop(&self, period: Duration) -> io::Result<()> {
         loop {
             self.send_once()?;
             std::thread::sleep(period);
@@ -45,7 +44,7 @@ impl Sender {
     }
 
     #[instrument(skip(self))]
-    pub fn send_once(&self) -> AnyResult<()> {
+    pub fn send_once(&self) -> io::Result<()> {
         self.socket.send_to(&self.payload, self.broadcast_addr)?;
         debug!("Sent broadcast to {}", self.broadcast_addr);
 
@@ -61,9 +60,10 @@ pub struct Listener {
 impl Listener {
     #[instrument]
     /// listening_port should be the same as the broadcast_port in the Sender.
-    pub fn new(listening_port: u16) -> AnyResult<Self> {
+    pub fn new(listening_port: u16) -> io::Result<Self> {
         let socket = UdpSocket::bind(format!("0.0.0.0:{}", listening_port))?;
         socket.set_broadcast(true)?;
+        socket.set_read_timeout(Some(Duration::from_secs(10)))?;
 
         debug!("Listening on port {}", listening_port);
 
@@ -71,11 +71,13 @@ impl Listener {
     }
 
     #[instrument(skip(self))]
-    pub fn recv_once(&self) -> AnyResult<SocketAddr> {
+    pub fn recv_once(&self) -> io::Result<SocketAddr> {
         let mut buffer = [0; 1024];
 
         loop {
-            let (len, source) = self.socket.recv_from(&mut buffer)?;
+            let (len, source) = self.socket.recv_from(&mut buffer).map_err(|e| {
+                io::Error::new(e.kind(), format!("Failed to receive broadcast: {}", e))
+            })?;
             debug!("Received broadcast from {}", source.ip(),);
 
             if buffer[0..7] == MAGIC {

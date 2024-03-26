@@ -24,6 +24,7 @@
 //!               ||                             ||
 
 mod broadcast;
-mod master;
+pub mod error;
+pub mod master;
 mod side;
 mod utils;

@@ -3,10 +3,7 @@ use futures::{SinkExt, StreamExt};
 use log::debug;
 use portal_macro::derive_conversion_with_u8;
 use serde::{Deserialize, Serialize};
-use std::{
-    fmt::{self, Display, Formatter},
-    io,
-};
+use std::io;
 use tokio::net::{
     tcp::{OwnedReadHalf, OwnedWriteHalf},
     TcpStream, ToSocketAddrs,
@@ -14,34 +11,10 @@ use tokio::net::{
 use tokio::sync::mpsc;
 use tokio_util::codec::{self, FramedRead, FramedWrite};
 
+use crate::error::Error;
 use crate::utils::u8_array_to_u16;
 
 type AnyResult<T = ()> = anyhow::Result<T>;
-
-#[derive(Debug, thiserror::Error)]
-pub enum ErrorKind {
-    Io(io::Error),
-    Bincode(bincode::Error),
-    Disconnected,
-    DataTooLarge,
-}
-
-impl Display for ErrorKind {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            ErrorKind::Io(e) => write!(f, "IO error: {}", e),
-            ErrorKind::Bincode(e) => write!(f, "Bincode error: {}", e),
-            ErrorKind::Disconnected => write!(f, "Disconnected"),
-            ErrorKind::DataTooLarge => write!(f, "Data too large"),
-        }
-    }
-}
-
-impl From<io::Error> for ErrorKind {
-    fn from(e: io::Error) -> Self {
-        ErrorKind::Io(e)
-    }
-}
 
 #[derive_conversion_with_u8]
 #[derive(Debug, Serialize, Deserialize)]
@@ -85,14 +58,14 @@ pub struct RequestCodec;
 const MAX_CONTENT_LENGTH: usize = 1498;
 
 impl codec::Encoder<Response> for ResponseCodec {
-    type Error = ErrorKind;
+    type Error = Error;
 
-    fn encode(&mut self, item: Response, dst: &mut BytesMut) -> Result<(), ErrorKind> {
-        let data = bincode::serialize(&item).map_err(ErrorKind::Bincode)?;
+    fn encode(&mut self, item: Response, dst: &mut BytesMut) -> Result<(), Error> {
+        let data = bincode::serialize(&item)?;
         let data_len = data.len();
 
         if data_len > MAX_CONTENT_LENGTH {
-            return Err(ErrorKind::DataTooLarge);
+            return Err(Error::DataTooLarge);
         }
 
         let data_len = 2 + data_len;
@@ -105,14 +78,14 @@ impl codec::Encoder<Response> for ResponseCodec {
 }
 
 impl codec::Encoder<Request> for RequestCodec {
-    type Error = ErrorKind;
+    type Error = Error;
 
-    fn encode(&mut self, item: Request, dst: &mut BytesMut) -> Result<(), ErrorKind> {
-        let data = bincode::serialize(&item).map_err(ErrorKind::Bincode)?;
+    fn encode(&mut self, item: Request, dst: &mut BytesMut) -> Result<(), Error> {
+        let data = bincode::serialize(&item)?;
         let data_len = data.len();
 
         if data_len > MAX_CONTENT_LENGTH {
-            return Err(ErrorKind::DataTooLarge);
+            return Err(Error::DataTooLarge);
         }
 
         let data_len = 2 + data_len;
@@ -125,7 +98,7 @@ impl codec::Encoder<Request> for RequestCodec {
 }
 
 impl codec::Decoder for ResponseCodec {
-    type Error = ErrorKind;
+    type Error = Error;
     type Item = Response;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Response>, Self::Error> {
@@ -141,13 +114,13 @@ impl codec::Decoder for ResponseCodec {
         }
 
         let serialized = src.split_to(total_length);
-        let response = bincode::deserialize(&serialized[2..]).map_err(ErrorKind::Bincode)?;
+        let response = bincode::deserialize(&serialized[2..])?;
         Ok(Some(response))
     }
 }
 
 impl codec::Decoder for RequestCodec {
-    type Error = ErrorKind;
+    type Error = Error;
     type Item = Request;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Request>, Self::Error> {
@@ -163,7 +136,7 @@ impl codec::Decoder for RequestCodec {
         }
 
         let serialized = src.split_to(total_length);
-        let request = bincode::deserialize(&serialized[2..]).map_err(ErrorKind::Bincode)?;
+        let request = bincode::deserialize(&serialized[2..])?;
         Ok(Some(request))
     }
 }
@@ -181,7 +154,7 @@ pub struct Side {
 }
 
 impl Side {
-    pub async fn new(remote_service: impl ToSocketAddrs) -> AnyResult<Self> {
+    pub async fn new(remote_service: impl ToSocketAddrs) -> io::Result<Self> {
         let tcp_stream = TcpStream::connect(remote_service).await?;
         let (rd, wr) = tcp_stream.into_split();
         let reader = FramedRead::new(rd, ResponseCodec);
@@ -192,14 +165,14 @@ impl Side {
 
     /// Send a request.
     #[inline]
-    pub async fn send_request(&mut self, request: Request) -> AnyResult<()> {
-        self.writer.send(request).await?;
+    pub async fn send_request(&mut self, request: Request) -> Result<(), Error> {
+        self.writer.feed(request).await?;
         Ok(())
     }
 
     /// Keep receiving responses until the connection is closed.
     /// Using a channel to receive remote responses.
-    pub async fn recv_responses(&mut self, msg_tx: mpsc::Sender<Response>) -> AnyResult<()> {
+    pub async fn recv_responses(&mut self, msg_tx: mpsc::Sender<Response>) -> Result<(), Error> {
         while let Some(resp) = self.reader.next().await {
             let resp = resp?;
             debug!("Received response: {:#?}", resp);
