@@ -3,8 +3,8 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{parse_macro_input, Data, DeriveInput};
 
-#[proc_macro]
-pub fn derive_conversion(input: TokenStream) -> TokenStream {
+#[proc_macro_attribute]
+pub fn derive_conversion_with_u8(_attr: TokenStream, input: TokenStream) -> TokenStream {
     let mut extended = TokenStream2::from(input.clone());
 
     let parsed_input = parse_macro_input!(input as DeriveInput);

@@ -1,7 +1,7 @@
 use bytes::{BufMut, BytesMut};
 use futures::{SinkExt, StreamExt};
 use log::debug;
-use portal_macro::derive_conversion;
+use portal_macro::derive_conversion_with_u8;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Display, Formatter},
@@ -43,23 +43,21 @@ impl From<io::Error> for ErrorKind {
     }
 }
 
-derive_conversion!(
-    #[derive(Debug, Serialize, Deserialize)]
-    pub(crate) enum RequestKind {
-        Ping,
-        Data,
-        FileFragment,
-    }
-);
+#[derive_conversion_with_u8]
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) enum RequestKind {
+    Ping,
+    Data,
+    FileFragment,
+}
 
-derive_conversion!(
-    #[derive(Debug, Serialize, Deserialize)]
-    pub(crate) enum ResponseKind {
-        Pong,
-        Data,
-        Ok,
-    }
-);
+#[derive_conversion_with_u8]
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) enum ResponseKind {
+    Pong,
+    Data,
+    Ok,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Request {
