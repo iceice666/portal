@@ -1,25 +1,17 @@
+use std::time::Duration;
+
+use portal_core::master::{Master, MasterConfig};
+use tokio::time::timeout;
+
 use crate::error::Error;
 
-pub trait Command {
-    fn new(input: &str) -> Option<Self>
-    where
-        Self: Sized;
-
-    fn get_options() -> Vec<&'static str>
-    where
-        Self: Sized;
-
-    fn dispatch(self) -> Result<(), Error>
-    where
-        Self: Sized;
-}
+type AnyResult<T = ()> = anyhow::Result<T>;
 
 macro_rules! cmd_opt {
     (
         $name:ident,
         $(
             $member:ident: $desc:literal
-            $(=>)? $exec:expr
             $(,)?
         )*
     ) => {
@@ -30,8 +22,8 @@ macro_rules! cmd_opt {
             )*
         }
 
-        impl Command for $name {
-            fn new(input: &str) -> Option<Self> {
+        impl $name {
+            pub fn new(input: &str) -> Option<Self> {
                 match input {
                     $(
                         $desc => Some(Self::$member),
@@ -40,7 +32,7 @@ macro_rules! cmd_opt {
                 }
             }
 
-            fn get_options() -> Vec<&'static str> {
+            pub fn get_options() -> Vec<&'static str> {
                 vec![
                     $(
                         $desc,
@@ -48,13 +40,6 @@ macro_rules! cmd_opt {
                 ]
             }
 
-            fn dispatch(self) -> Result<(), Error> {
-                match self {
-                    $(
-                        Self::$member => $exec,
-                    )*
-                }
-            }
         }
 
 
@@ -63,32 +48,69 @@ macro_rules! cmd_opt {
 
 cmd_opt!(
     MainCommand,
-    Exit: "Exit the program" => Err(Error::Exit),
-    Config: "Edit the configuration" {
-                todo!()
-    },
-    ScanDevices: "Scan for devices" {
-                todo!()
-    },
-    ListDevices: "List all devices" {
-                todo!()
-    },
-    SendFile: "Send a file to a device" {
-                todo!()
-    },
-    RecvFile: "Receive a file from a device" {
-                todo!()
-    },
-    PauseTask: "Pause a task" {
-                todo!()
-    },
-    ResumeTask: "Resume a task" {
-                todo!()
-    },
-    AbortTask: "Abort a task" {
-                todo!()
-    },
-    ListTask: "List all tasks" {
-                todo!()
-    },
+    Exit: "Exit the program",
+    Config: "Edit the configuration" ,
+    ScanDevices: "Scan for devices" ,
+    ListDevices: "List all devices" ,
+    SendFile: "Send a file to a device" ,
+    RecvFile: "Receive a file from a device" ,
+    PauseTask: "Pause a task" ,
+    ResumeTask: "Resume a task" ,
+    AbortTask: "Abort a task" ,
+    ListTask: "List all tasks" ,
 );
+
+impl MainCommand {
+    #[async_recursion::async_recursion]
+    pub async fn dispatch(self, master: &mut Master) -> Result<(), Error> {
+        match self {
+            Self::Exit => Err(Error::Exit),
+            Self::Config => {
+                todo!();
+            }
+            Self::ScanDevices => {
+                master.scan_device()?;
+
+                println!("Scanning complete.");
+
+                Self::ListDevices.dispatch(master).await?;
+
+                Ok(())
+            }
+            Self::ListDevices => {
+                let res = timeout(Duration::from_secs(5), master.get_devices())
+                    .await
+                    .map_err(|_| Error::Timeout)?;
+
+                if res.is_empty() {
+                    println!("No devices found.");
+                } else {
+                    println!("Devices found:");
+                    for device in res {
+                        println!("{}", device);
+                    }
+                }
+
+                Ok(())
+            }
+            Self::SendFile => {
+                todo!();
+            }
+            Self::RecvFile => {
+                todo!();
+            }
+            Self::PauseTask => {
+                todo!();
+            }
+            Self::ResumeTask => {
+                todo!();
+            }
+            Self::AbortTask => {
+                todo!();
+            }
+            Self::ListTask => {
+                todo!();
+            }
+        }
+    }
+}

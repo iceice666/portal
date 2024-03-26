@@ -9,3 +9,8 @@ edition = "2021"
 anyhow = "1.0.81"
 inquire = "0.7.4"
 thiserror = "1.0.58"
+lazy_static = "1.4.0"
+portal-core = { path = "../core" }
+tokio = { version = "1", features = ["time", "rt-multi-thread", "rt"] }
+async-recursion = "1.1.0"
+env_logger = "0.11.3"

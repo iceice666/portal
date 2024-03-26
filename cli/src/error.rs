@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-#[derive(Error, Debug, PartialEq, Eq)]
+#[derive(Error, Debug)]
 pub enum Error {
     #[error("Invalid input. Please try again.")]
     InvalidInput,
@@ -10,6 +10,13 @@ pub enum Error {
     NotImplemented,
     #[error("An error occurred: {0}")]
     Custom(String),
+    #[error("Timeout occurred.")]
+    Timeout,
+    #[error("An IO error occurred: {source}")]
+    Io {
+        #[from]
+        source: std::io::Error,
+    },
 }
 
 impl Error {

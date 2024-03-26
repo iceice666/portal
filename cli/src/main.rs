@@ -1,15 +1,22 @@
-use crate::command::Command;
 use crate::command::MainCommand;
 use error::Error;
 use inquire::Select;
+use portal_core::master::{Master, MasterConfig};
 
 type AnyResult<T = ()> = anyhow::Result<T>;
 
 mod command;
 mod error;
 
-fn main() {
+#[tokio::main]
+async fn main() {
+    env_logger::init();
+
+    let mut master = Master::new(MasterConfig::default());
+
     loop {
+        println!();
+
         let ans = Select::new(
             "Greetings! What would you like to do today?",
             MainCommand::get_options(),
@@ -29,7 +36,7 @@ fn main() {
             continue;
         }
         let cmd = cmd.unwrap();
-        let res = cmd.dispatch();
+        let res = cmd.dispatch(&mut master).await;
 
         if res.is_ok() {
             continue;
@@ -38,8 +45,8 @@ fn main() {
         let error = res.unwrap_err();
         error.handle();
 
-        if error == Error::Exit {
+        if matches!(error, Error::Exit) {
             break;
-        }
+        };
     }
 }
