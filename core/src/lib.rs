@@ -27,4 +27,5 @@ mod broadcast;
 pub mod error;
 pub mod master;
 mod side;
+mod slave;
 mod utils;
