@@ -6,7 +6,7 @@ use tracing::instrument;
 
 use crate::utils::{u16_to_u8_array, u8_array_to_u16};
 
-const MAGIC: [u8; 7] = [0xb, 0x2d, 0xe, 0x13, 0x13, 0x8, 0xa];
+const MAGIC: [u8; 7] = [0xB, 0x2D, 0xE, 0x13, 0x13, 0x8, 0xA];
 
 pub struct Sender {
     socket: UdpSocket,
@@ -63,7 +63,7 @@ impl Listener {
     pub fn new(listening_port: u16) -> io::Result<Self> {
         let socket = UdpSocket::bind(format!("0.0.0.0:{}", listening_port))?;
         socket.set_broadcast(true)?;
-        socket.set_read_timeout(Some(Duration::from_secs(10)))?;
+        socket.set_read_timeout(Some(Duration::from_secs(60)))?;
 
         debug!("Listening on port {}", listening_port);
 

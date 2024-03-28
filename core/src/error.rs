@@ -7,7 +7,7 @@ pub enum Error {
         #[from]
         source: std::io::Error,
     },
-    #[error("An Bincode error occurred: {source}")]
+    #[error("A Bincode error occurred: {source}")]
     Bincode {
         #[from]
         source: bincode::Error,

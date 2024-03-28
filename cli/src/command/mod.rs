@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use portal_core::master::{Master, MasterConfig};
+use portal_core::master::Master;
 use tokio::time::timeout;
 
 use crate::error::Error;
@@ -52,8 +52,8 @@ cmd_opt!(
     Config: "Edit the configuration" ,
     ScanDevices: "Scan for devices" ,
     ListDevices: "List all devices" ,
+    MakeAvailable: "Make this device detectable by others" ,
     SendFile: "Send a file to a device" ,
-    RecvFile: "Receive a file from a device" ,
     PauseTask: "Pause a task" ,
     ResumeTask: "Resume a task" ,
     AbortTask: "Abort a task" ,
@@ -93,10 +93,10 @@ impl MainCommand {
 
                 Ok(())
             }
-            Self::SendFile => {
+            Self::MakeAvailable => {
                 todo!();
             }
-            Self::RecvFile => {
+            Self::SendFile => {
                 todo!();
             }
             Self::PauseTask => {

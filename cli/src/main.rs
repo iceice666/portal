@@ -9,10 +9,10 @@ mod command;
 mod error;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> AnyResult {
     env_logger::init();
 
-    let mut master = Master::new(MasterConfig::default());
+    let mut master = Master::new(MasterConfig::default())?;
 
     loop {
         println!();
@@ -49,4 +49,6 @@ async fn main() {
             break;
         };
     }
+
+    Ok(())
 }
