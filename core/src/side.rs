@@ -1,7 +1,6 @@
 use bytes::{BufMut, BytesMut};
 use futures::{SinkExt, StreamExt};
 use log::debug;
-use portal_macro::derive_conversion_with_u8;
 use serde::{Deserialize, Serialize};
 use std::io;
 use tokio::net::{
@@ -16,15 +15,13 @@ use crate::utils::u8_array_to_u16;
 
 type AnyResult<T = ()> = anyhow::Result<T>;
 
-#[derive_conversion_with_u8]
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) enum RequestKind {
     Ping,
     Data,
-    FileFragment,
+    FileFragment { offset: u64, data: Vec<u8> },
 }
 
-#[derive_conversion_with_u8]
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) enum ResponseKind {
     Pong,
@@ -33,16 +30,10 @@ pub(crate) enum ResponseKind {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Request {
-    kind: RequestKind,
-    content: Vec<u8>,
-}
+pub struct Request(pub(crate) RequestKind);
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Response {
-    kind: ResponseKind,
-    content: Vec<u8>,
-}
+pub struct Response(pub(crate) ResponseKind);
 
 #[derive(Debug)]
 pub struct ResponseCodec;
@@ -55,7 +46,7 @@ pub struct RequestCodec;
 /// |              |    Warped by struct    |
 /// | Total Length |  Kind  |    Content    |
 /// |    2 bytes   | 1 byte |    n bytes    |
-const MAX_CONTENT_LENGTH: usize = 1498;
+const MAX_CONTENT_SIZE: usize = 1498;
 
 impl codec::Encoder<Response> for ResponseCodec {
     type Error = Error;
@@ -64,7 +55,7 @@ impl codec::Encoder<Response> for ResponseCodec {
         let data = bincode::serialize(&item)?;
         let data_len = data.len();
 
-        if data_len > MAX_CONTENT_LENGTH {
+        if data_len > MAX_CONTENT_SIZE {
             return Err(Error::DataTooLarge);
         }
 
@@ -84,7 +75,7 @@ impl codec::Encoder<Request> for RequestCodec {
         let data = bincode::serialize(&item)?;
         let data_len = data.len();
 
-        if data_len > MAX_CONTENT_LENGTH {
+        if data_len > MAX_CONTENT_SIZE {
             return Err(Error::DataTooLarge);
         }
 

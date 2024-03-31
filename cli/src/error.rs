@@ -17,6 +17,11 @@ pub enum Error {
         #[from]
         source: std::io::Error,
     },
+    #[error("An core lib error occurred: {source}")]
+    CoreLib {
+        #[from]
+        source: portal_core::error::Error,
+    },
 }
 
 impl Error {

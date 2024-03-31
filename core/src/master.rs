@@ -1,12 +1,19 @@
-use std::{collections::HashSet, fs::File, io, net::SocketAddr, path::PathBuf, sync::Mutex};
+use std::{collections::HashSet, fs::File, io::Read, net::SocketAddr, path::PathBuf, sync::Mutex};
 use tracing::instrument;
 
-use crate::{broadcast, side::Side};
+use crate::{
+    broadcast,
+    side::{Request, RequestKind, Side},
+};
 
+type Result<T = ()> = std::result::Result<T, crate::error::Error>;
+
+#[derive(Debug)]
 pub struct MasterConfig {
     udp_port: u16,
 }
 
+#[derive(Debug)]
 pub struct Master {
     scanned_devices: Mutex<HashSet<SocketAddr>>,
     config: MasterConfig,
@@ -20,7 +27,10 @@ impl Default for MasterConfig {
 }
 
 impl Master {
-    pub fn new(config: MasterConfig) -> io::Result<Self> {
+    //! Why 1478? You can run the [test_max_cap] to find out.
+    const CONTENT_FARGMENT_MAX_BYTES: usize = 1478;
+
+    pub fn new(config: MasterConfig) -> Result<Self> {
         let broadcast_listener = broadcast::Listener::new(config.udp_port)?;
 
         Ok(Self {
@@ -31,22 +41,40 @@ impl Master {
     }
 
     #[instrument(skip(self))]
-    pub fn scan_device(&mut self) -> io::Result<()> {
-        loop {
-            let addr = self.broadcast_listener.recv_once()?;
+    pub fn scan_device(&mut self) -> Result<()> {
+        let addr = self.broadcast_listener.recv_once()?;
 
-            while let Ok(mut de) = self.scanned_devices.try_lock() {
-                de.insert(addr);
-            }
+        while let Ok(mut de) = self.scanned_devices.try_lock() {
+            de.insert(addr);
         }
+
+        Ok(())
     }
 
     #[instrument(skip(self))]
-    async fn send_a_file(&self, addr: SocketAddr, file: PathBuf) -> io::Result<()> {
-        let side = Side::new(addr).await?;
+    async fn send_a_file(&self, addr: SocketAddr, file: PathBuf) -> Result<()> {
+        let mut side = Side::new(addr).await?;
         let file = File::open(file)?;
 
-        unimplemented!()
+        let file_length = file.metadata()?.len();
+
+        let mut buf = vec![0; Self::CONTENT_FARGMENT_MAX_BYTES];
+        let mut read_bytes = 0;
+        let mut handler = file.take(Self::CONTENT_FARGMENT_MAX_BYTES as u64);
+
+        while read_bytes < file_length {
+            let read = handler.read(&mut buf)? as u64;
+            read_bytes += read;
+
+            let request = Request(RequestKind::FileFragment {
+                offset: read_bytes,
+                data: buf.clone(),
+            });
+
+            side.send_request(request).await?;
+        }
+
+        Ok(())
     }
 
     #[instrument(skip(self))]
@@ -63,6 +91,8 @@ impl Master {
 #[cfg(test)]
 mod test {
     type AnyResult<T = ()> = anyhow::Result<T>;
+    use crate::utils::u64_to_u8_array;
+
     use super::*;
 
     /// Test process
@@ -72,10 +102,45 @@ mod test {
     /// 4. Send the sha256 hash of the file
     /// 5. Close the connection
     /// 6. End
-    #[test]
-    fn test() -> AnyResult<()> {
-        let master = Master::new(MasterConfig::default())?;
+    #[tokio::test]
+    async fn test() -> AnyResult<()> {
+        let mut master = Master::new(MasterConfig::default())?;
+
+        master.scan_device()?;
+        let devices = master.get_devices().await;
+        let device = devices.iter().next().unwrap();
 
         unimplemented!()
+    }
+
+    #[test]
+    // cargo test max --lib -- --show-output
+    fn test_max_cap() -> AnyResult<()> {
+        let file = PathBuf::from("Cargo.toml");
+        let file = File::open(file)?;
+
+        let file_length = file.metadata()?.len();
+
+        let mut content_fargment_max_bytes = 0;
+        while content_fargment_max_bytes < 1498 {
+            content_fargment_max_bytes += 1;
+
+            let mut buf = vec![0; content_fargment_max_bytes];
+
+            let request = Request(RequestKind::FileFragment {
+                offset: 114514,
+                data: buf.clone(),
+            });
+
+            let data = bincode::serialize(&request)?;
+            let data_len = data.len();
+
+            if data_len > 1498 {
+                println!("Max cap is {}", content_fargment_max_bytes - 1);
+                break;
+            }
+        }
+
+        Ok(())
     }
 }
