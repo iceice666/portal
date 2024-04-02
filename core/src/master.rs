@@ -1,8 +1,17 @@
-use std::{collections::HashSet, fs::File, io::Read, net::SocketAddr, path::PathBuf, sync::Mutex};
+use std::{
+    collections::HashSet,
+    ffi::OsStr,
+    fs::File,
+    io::Read,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 use tracing::instrument;
 
 use crate::{
     broadcast,
+    error::Error,
     side::{Request, RequestKind, Side},
 };
 
@@ -51,12 +60,35 @@ impl Master {
         Ok(())
     }
 
+    /// Send a file to the device
     #[instrument(skip(self))]
-    async fn send_a_file(&self, addr: SocketAddr, file: PathBuf) -> Result<()> {
+    async fn send_a_file(&self, addr: SocketAddr, path: PathBuf) -> Result<()> {
         let mut side = Side::new(addr).await?;
-        let file = File::open(file)?;
 
-        let file_length = file.metadata()?.len();
+        let file_name = match path.file_name() {
+            Some(v) => v.to_string_lossy().to_string(),
+            None => "Untitled".to_string(),
+        };
+
+        let file = File::open(path.clone())?;
+        let metadata = file.metadata()?;
+
+        if !metadata.is_file() {
+            return Err(Error::NotAFile);
+        }
+
+        // Send the file metadata
+        let sha256 = match sha256::try_digest(path) {
+            Ok(v) => v,
+            Err(_) => return Err(Error::Sha256Digest),
+        };
+
+        let request = Request(RequestKind::FileMetadata { file_name, sha256 });
+
+        side.send_request(request).await?;
+
+        // Send the file content
+        let file_length = metadata.len();
 
         let mut buf = vec![0; Self::CONTENT_FARGMENT_MAX_BYTES];
         let mut read_bytes = 0;
@@ -73,6 +105,10 @@ impl Master {
 
             side.send_request(request).await?;
         }
+
+        // Send the end of file
+        let request = Request(RequestKind::EndOfFile);
+        side.send_request(request).await?;
 
         Ok(())
     }
@@ -105,12 +141,15 @@ mod test {
     #[tokio::test]
     async fn test() -> AnyResult<()> {
         let mut master = Master::new(MasterConfig::default())?;
+        let file = PathBuf::from("test.txt");
 
         master.scan_device()?;
         let devices = master.get_devices().await;
-        let device = devices.iter().next().unwrap();
+        let device = devices.iter().next()?;
 
-        unimplemented!()
+        master.send_a_file(device, file);
+
+        Ok(())
     }
 
     #[test]

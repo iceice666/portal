@@ -28,4 +28,4 @@ tracing-subscriber = "0.3.18"
 portal-macro = { path = "../macro" }
 futures = "0.3.30"
 lazy_static = "1.4.0"
-dotenvy = "0.15.7"
+sha256 = "1"

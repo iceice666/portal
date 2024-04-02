@@ -20,6 +20,8 @@ pub(crate) enum RequestKind {
     Ping,
     Data,
     FileFragment { offset: u64, data: Vec<u8> },
+    FileMetadata { file_name: String, sha256: String },
+    EndOfFile,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -15,4 +15,10 @@ pub enum Error {
 
     #[error("The data is too large.")]
     DataTooLarge,
+
+    #[error("Cannot calculate the SHA256 hash.")]
+    Sha256Digest,
+
+    #[error("Given path is not a file.")]
+    NotAFile,
 }
