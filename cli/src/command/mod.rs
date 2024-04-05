@@ -1,7 +1,10 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
-use portal_core::master::Master;
-use tokio::time::timeout;
+use portal_core::{
+    broadcast::{Listener, Sender},
+    error::CrateResult,
+    side::TcpConnection,
+};
 
 use crate::error::Error;
 
@@ -52,7 +55,7 @@ cmd_opt!(
     Config: "Edit the configuration" ,
     ScanDevices: "Scan for devices" ,
     ListDevices: "List all devices" ,
-    MakeAvailable: "Make this device detectable by others" ,
+    MakeAvailable: "Make this device detectable by others in 1 minute" ,
     SendFile: "Send a file to a device" ,
     PauseTask: "Pause a task" ,
     ResumeTask: "Resume a task" ,
@@ -60,55 +63,104 @@ cmd_opt!(
     ListTask: "List all tasks" ,
 );
 
-impl MainCommand {
+pub(crate) struct Manager {
+    broadcast_sender: Arc<Sender>,
+    broadcast_listener: Listener,
+    master: Option<TcpConnection>,
+    slaves: Vec<TcpConnection>,
+}
+
+impl Manager {
+    pub fn try_new(
+        service_port: u16,
+        broadcast_port: u16,
+        listening_port: u16,
+    ) -> CrateResult<Self> {
+        let broadcast_sender = Arc::new(Sender::new(service_port, broadcast_port)?);
+        let broadcast_listener = Listener::new(listening_port)?;
+
+        Ok(Self {
+            broadcast_listener,
+            broadcast_sender,
+            master: None,
+            slaves: Vec::new(),
+        })
+    }
+
+    pub(crate) fn refresh(
+        &mut self,
+        service_port: u16,
+        broadcast_port: u16,
+        listening_port: u16,
+    ) -> CrateResult<()> {
+        let _ = std::mem::replace(
+            self,
+            Self::try_new(service_port, broadcast_port, listening_port)?,
+        );
+
+        Ok(())
+    }
+
     #[async_recursion::async_recursion]
-    pub async fn dispatch(self, master: &mut Master) -> Result<(), Error> {
-        match self {
-            Self::Exit => Err(Error::Exit),
-            Self::Config => {
+    pub async fn dispatch(&mut self, cmd: MainCommand) -> Result<(), Error> {
+        match cmd {
+            MainCommand::Exit => Err(Error::Exit),
+            MainCommand::Config => {
                 todo!();
             }
-            Self::ScanDevices => {
-                master.scan_device()?;
+
+            MainCommand::ScanDevices => {
+                self.broadcast_listener.scan_device()?;
 
                 println!("Scanning complete.");
 
-                Self::ListDevices.dispatch(master).await?;
+                self.dispatch(MainCommand::ListDevices).await?;
 
                 Ok(())
             }
-            Self::ListDevices => {
-                let res = timeout(Duration::from_secs(5), master.get_devices())
-                    .await
-                    .map_err(|_| Error::Timeout)?;
 
-                if res.is_empty() {
+            MainCommand::ListDevices => {
+                let devices = &self.broadcast_listener.scanned_devices;
+
+                if devices.is_empty() {
                     println!("No devices found.");
                 } else {
                     println!("Devices found:");
-                    for device in res {
+                    for device in devices {
                         println!("{}", device);
                     }
                 }
 
                 Ok(())
             }
-            Self::MakeAvailable => {
+
+            MainCommand::MakeAvailable => {
+                let sender = Arc::clone(&self.broadcast_sender);
+
+                tokio::spawn(async move {
+                    let _ = tokio::time::timeout(
+                        Duration::from_secs(60),
+                        sender.async_send_loop(Duration::from_secs(1)),
+                    )
+                    .await;
+                });
+
+                Ok(())
+            }
+
+            MainCommand::SendFile => {
                 todo!();
             }
-            Self::SendFile => {
+            MainCommand::PauseTask => {
                 todo!();
             }
-            Self::PauseTask => {
+            MainCommand::ResumeTask => {
                 todo!();
             }
-            Self::ResumeTask => {
+            MainCommand::AbortTask => {
                 todo!();
             }
-            Self::AbortTask => {
-                todo!();
-            }
-            Self::ListTask => {
+            MainCommand::ListTask => {
                 todo!();
             }
         }

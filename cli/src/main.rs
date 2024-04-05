@@ -1,7 +1,7 @@
 use crate::command::MainCommand;
+use command::Manager;
 use error::Error;
 use inquire::Select;
-use portal_core::master::{Master, MasterConfig};
 
 type AnyResult<T = ()> = anyhow::Result<T>;
 
@@ -10,33 +10,43 @@ mod error;
 
 #[tokio::main]
 async fn main() -> AnyResult {
-    env_logger::init();
+    tracing_subscriber::fmt::init();
 
-    let mut master = Master::new(MasterConfig::default())?;
+    let service_port = portpicker::pick_unused_port().expect("No ports available");
+    let broadcast_port = portpicker::pick_unused_port().expect("No ports available");
+
+    let mut manager = Manager::try_new(service_port, broadcast_port, broadcast_port)?;
 
     loop {
+        // Print a newline to separate the previous output from the new one
         println!();
 
+        // Prompt the user for input
         let ans = Select::new(
             "Greetings! What would you like to do today?",
             MainCommand::get_options(),
         )
         .prompt();
 
-        if ans.is_err() {
-            println!("Invalid input. Please try again.");
-            continue;
-        }
+        // If the user input is invalid, prompt them again
+        let main_ans = match ans {
+            Err(_) => {
+                println!("Invalid input. Please try again.");
+                continue;
+            }
+            Ok(ans) => ans,
+        };
 
-        let main_ans = ans.unwrap();
+        // If this command is invalid, prompt the user again
+        let cmd = match MainCommand::new(main_ans) {
+            Some(cmd) => cmd,
+            None => {
+                println!("Invalid input. Please try again.");
+                continue;
+            }
+        };
 
-        let cmd = MainCommand::new(main_ans);
-        if cmd.is_none() {
-            println!("Invalid input. Please try again.");
-            continue;
-        }
-        let cmd = cmd.unwrap();
-        let res = cmd.dispatch(&mut master).await;
+        let res = manager.dispatch(cmd).await;
 
         if res.is_ok() {
             continue;
