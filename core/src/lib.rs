@@ -23,9 +23,7 @@
 //!               || ==========================> || Merge data
 //!               ||                             ||
 
-mod broadcast;
+pub mod broadcast;
 pub mod error;
-pub mod master;
-mod side;
-mod slave;
+pub mod side;
 mod utils;

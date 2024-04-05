@@ -1,4 +1,5 @@
 use log::debug;
+use std::collections::HashSet;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::Duration;
@@ -43,6 +44,13 @@ impl Sender {
         }
     }
 
+    pub async fn async_send_loop(&self, period: Duration) -> io::Result<()> {
+        loop {
+            self.send_once()?;
+            tokio::time::sleep(period).await;
+        }
+    }
+
     #[instrument(skip(self))]
     pub fn send_once(&self) -> io::Result<()> {
         self.socket.send_to(&self.payload, self.broadcast_addr)?;
@@ -55,23 +63,29 @@ impl Sender {
 #[derive(Debug)]
 pub struct Listener {
     socket: UdpSocket,
+    pub scanned_devices: HashSet<SocketAddr>,
 }
 
 impl Listener {
     #[instrument]
-    /// listening_port should be the same as the broadcast_port in the Sender.
+    /// `listening_port` should be the same as the `broadcast_port` in the Sender.
     pub fn new(listening_port: u16) -> io::Result<Self> {
         let socket = UdpSocket::bind(format!("0.0.0.0:{}", listening_port))?;
         socket.set_broadcast(true)?;
         socket.set_read_timeout(Some(Duration::from_secs(60)))?;
 
+        let scanned_devices = HashSet::new();
+
         debug!("Listening on port {}", listening_port);
 
-        Ok(Self { socket })
+        Ok(Self {
+            socket,
+            scanned_devices,
+        })
     }
 
     #[instrument(skip(self))]
-    pub fn recv_once(&self) -> io::Result<SocketAddr> {
+    pub(crate) fn recv_once(&self) -> io::Result<SocketAddr> {
         let mut buffer = [0; 1024];
 
         loop {
@@ -88,6 +102,15 @@ impl Listener {
                 return Ok(SocketAddr::new(source.ip(), port));
             }
         }
+    }
+
+    #[instrument(skip(self))]
+    pub fn scan_device(&mut self) -> io::Result<()> {
+        let addr = self.recv_once()?;
+
+        self.scanned_devices.insert(addr);
+
+        Ok(())
     }
 }
 
@@ -107,8 +130,7 @@ mod test {
         let sender = Sender::new(service_port, broadcast_port)?;
         let listener = Listener::new(broadcast_port)?;
 
-        let sender_handle =
-            std::thread::spawn(move || sender.send_loop(std::time::Duration::from_secs(1)));
+        std::thread::spawn(move || sender.send_loop(std::time::Duration::from_secs(1)));
 
         sleep(Duration::from_secs(5));
         let addr = listener.recv_once()?;

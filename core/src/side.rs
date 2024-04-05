@@ -12,34 +12,34 @@ use tokio::sync::mpsc;
 use tokio_util::codec::{self, FramedRead, FramedWrite};
 use tracing::instrument;
 
-use crate::error::Error;
+use crate::error::{CrateResult, Error};
 use crate::utils::u8_array_to_u16;
 
-type AnyResult<T = ()> = anyhow::Result<T>;
-
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) enum RequestKind {
+pub enum Request {
     Ping,
     Data,
-    FileFragment { offset: u64, data: Vec<u8> },
-    FileMetadata { file_name: String, sha256: String },
-    EndOfFile,
+    FileFragment {
+        file_id: u8,
+        offset: u64,
+        data: Vec<u8>,
+    },
+    FileMetadata {
+        file_id: u8,
+        file_name: String,
+        sha256: String,
+    },
+    EndOfFile {
+        file_id: u8,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) enum ResponseKind {
+pub enum Response {
     Pong,
     Data,
     Ok,
 }
-
-type Result<T = ()> = std::result::Result<T, Error>;
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Request(pub(crate) RequestKind);
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Response(pub(crate) ResponseKind);
 
 #[derive(Debug)]
 pub struct ResponseCodec;
@@ -48,16 +48,18 @@ pub struct RequestCodec;
 
 /// The MTU is 1500 bytes.
 /// Frame format:
-/// |           Max is 1500 bytes           |
-/// |              |    Warped by struct    |
-/// | Total Length |  Kind  |    Content    |
-/// |    2 bytes   | 1 byte |    n bytes    |
+/// |        Max is 1500 bytes        |
+/// |              | Warped by struct |
+/// | Total Length |      Content     |
+/// |    2 bytes   |    1498 bytes    |
 const MAX_CONTENT_SIZE: usize = 1498;
+/// Check [test_max_cap] test function
+const MAX_FILE_FARGMENT_SIZE: usize = 1477;
 
 impl codec::Encoder<Response> for ResponseCodec {
     type Error = Error;
 
-    fn encode(&mut self, item: Response, dst: &mut BytesMut) -> Result {
+    fn encode(&mut self, item: Response, dst: &mut BytesMut) -> CrateResult {
         let data = bincode::serialize(&item)?;
         let data_len = data.len();
 
@@ -77,7 +79,7 @@ impl codec::Encoder<Response> for ResponseCodec {
 impl codec::Encoder<Request> for RequestCodec {
     type Error = Error;
 
-    fn encode(&mut self, item: Request, dst: &mut BytesMut) -> Result {
+    fn encode(&mut self, item: Request, dst: &mut BytesMut) -> CrateResult {
         let data = bincode::serialize(&item)?;
         let data_len = data.len();
 
@@ -98,7 +100,7 @@ impl codec::Decoder for ResponseCodec {
     type Error = Error;
     type Item = Response;
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Response>> {
+    fn decode(&mut self, src: &mut BytesMut) -> CrateResult<Option<Response>> {
         if src.len() < 2 {
             return Ok(None);
         }
@@ -120,7 +122,7 @@ impl codec::Decoder for RequestCodec {
     type Error = Error;
     type Item = Request;
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Request>> {
+    fn decode(&mut self, src: &mut BytesMut) -> CrateResult<Option<Request>> {
         if src.len() < 2 {
             return Ok(None);
         }
@@ -145,39 +147,21 @@ impl codec::Decoder for RequestCodec {
 /// Pass a channel to [recv_responses] to get responses
 /// remote => [recv_responses] -> channel sender => another thread/process
 #[derive(Debug)]
-pub struct Side {
+pub struct TcpConnection {
     writer: FramedWrite<OwnedWriteHalf, RequestCodec>,
     reader: FramedRead<OwnedReadHalf, ResponseCodec>,
 }
 
-/// Why 1478? You can run the [test_max_cap] to find out.
-const CONTENT_FARGMENT_MAX_BYTES: usize = 1478;
-
-impl Side {
+impl TcpConnection {
     /// Send a request.
     #[inline]
-    pub async fn send_request(&mut self, request: Request) -> Result {
+    async fn send_request(&mut self, request: Request) -> CrateResult {
         self.writer.feed(request).await?;
         Ok(())
     }
 
-    /// Keep receiving responses until the connection is closed.
-    /// Using a channel to receive remote responses.
-    pub async fn recv_responses(&mut self, msg_tx: mpsc::Sender<Response>) -> Result {
-        while let Some(resp) = self.reader.next().await {
-            let resp = resp?;
-            debug!("Received response: {:#?}", resp);
-
-            if msg_tx.send(resp).await.is_err() {
-                debug!("Receiver dropped, quitting");
-                break;
-            }
-        }
-        Ok(())
-    }
-
     #[instrument(skip(self))]
-    pub async fn send_a_file(&mut self, path: PathBuf) -> Result {
+    pub async fn send_a_file(&mut self, path: PathBuf) -> CrateResult {
         let file_name = match path.file_name() {
             Some(v) => v.to_string_lossy().to_string(),
             None => "Untitled".to_string(),
@@ -196,45 +180,71 @@ impl Side {
             Err(_) => return Err(Error::Sha256Digest),
         };
 
-        let request = Request(RequestKind::FileMetadata { file_name, sha256 });
+        // take first 2 chars as u8
+        let file_id = u8::from_str_radix(&sha256[0..=1], 16).unwrap_or(255);
+
+        let request = Request::FileMetadata {
+            file_id,
+            file_name,
+            sha256,
+        };
 
         self.send_request(request).await?;
 
         // Send the file content
         let file_length = metadata.len();
 
-        let mut buf = vec![0; CONTENT_FARGMENT_MAX_BYTES];
+        let mut buf = vec![0; MAX_FILE_FARGMENT_SIZE];
         let mut read_bytes = 0;
-        let mut handler = file.take(CONTENT_FARGMENT_MAX_BYTES as u64);
+        let mut handler = file.take(MAX_FILE_FARGMENT_SIZE as u64);
 
         while read_bytes < file_length {
             let read = handler.read(&mut buf)? as u64;
             read_bytes += read;
 
-            let request = Request(RequestKind::FileFragment {
+            let request = Request::FileFragment {
+                file_id,
                 offset: read_bytes,
                 data: buf.clone(),
-            });
+            };
 
             self.send_request(request).await?;
         }
 
         // Send the end of file
-        let request = Request(RequestKind::EndOfFile);
+        let request = Request::EndOfFile { file_id };
         self.send_request(request).await?;
 
         Ok(())
     }
 
     #[instrument(skip(self))]
-    pub async fn ping(&mut self) -> Result {
-        self.send_request(Request(RequestKind::Ping)).await?;
+    pub async fn ping(&mut self) -> CrateResult {
+        self.send_request(Request::Ping).await?;
 
         Ok(())
     }
 }
 
-impl From<TcpStream> for Side {
+// receive
+impl TcpConnection {
+    /// Keep receiving responses until the connection is closed.
+    /// Using a channel to receive remote responses.
+    async fn recv_responses(&mut self, msg_tx: mpsc::Sender<Response>) -> CrateResult {
+        while let Some(resp) = self.reader.next().await {
+            let resp = resp?;
+            debug!("Received response: {:#?}", resp);
+
+            if msg_tx.send(resp).await.is_err() {
+                debug!("Receiver dropped, quitting");
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl From<tokio::net::TcpStream> for TcpConnection {
     fn from(value: TcpStream) -> Self {
         let (rd, wr) = value.into_split();
 
@@ -248,7 +258,10 @@ impl From<TcpStream> for Side {
 #[cfg(test)]
 mod test {
 
+    use rand::Rng;
+
     use super::*;
+    type AnyResult<T = ()> = anyhow::Result<T>;
 
     #[test]
     // cargo test max --lib -- --show-output
@@ -258,16 +271,24 @@ mod test {
 
         let file_length = file.metadata()?.len();
 
+        let mut rng = rand::thread_rng();
+
+        let raw_data = rng
+            .sample_iter(rand::distributions::Uniform::new(0, 255))
+            .take(1498)
+            .collect::<Vec<u8>>();
+
         let mut content_fargment_max_bytes = 0;
         while content_fargment_max_bytes < 1498 {
             content_fargment_max_bytes += 1;
 
-            let mut buf = vec![0; content_fargment_max_bytes];
+            let mut buf = &raw_data[0..content_fargment_max_bytes];
 
-            let request = Request(RequestKind::FileFragment {
+            let request = Request::FileFragment {
                 offset: 114514,
-                data: buf.clone(),
-            });
+                data: buf.to_vec(),
+                file_id: 0,
+            };
 
             let data = bincode::serialize(&request)?;
             let data_len = data.len();
