@@ -38,6 +38,11 @@ impl Slave {
 
         Ok(())
     }
+
+    #[instrument(skip(self))]
+    pub async fn receive_a_file(&self) -> io::Result<()> {
+        unimplemented!()
+    }
 }
 
 #[cfg(test)]
@@ -55,6 +60,11 @@ mod test {
     /// 7. End
     #[test]
     fn test() -> AnyResult {
-        unimplemented!()
+        let slave = Slave::new(SlaveConfig::default())?;
+        let handler = std::thread::spawn(|| {
+            slave.broadcast_sender.send_loop(Duration::from_secs(1));
+        });
+
+        Ok(())
     }
 }

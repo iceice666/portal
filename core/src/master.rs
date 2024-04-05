@@ -7,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Mutex,
 };
+use tokio::net::TcpStream;
 use tracing::instrument;
 
 use crate::{
@@ -60,59 +61,6 @@ impl Master {
         Ok(())
     }
 
-    /// Send a file to the device
-    #[instrument(skip(self))]
-    async fn send_a_file(&self, addr: SocketAddr, path: PathBuf) -> Result<()> {
-        let mut side = Side::new(addr).await?;
-
-        let file_name = match path.file_name() {
-            Some(v) => v.to_string_lossy().to_string(),
-            None => "Untitled".to_string(),
-        };
-
-        let file = File::open(path.clone())?;
-        let metadata = file.metadata()?;
-
-        if !metadata.is_file() {
-            return Err(Error::NotAFile);
-        }
-
-        // Send the file metadata
-        let sha256 = match sha256::try_digest(path) {
-            Ok(v) => v,
-            Err(_) => return Err(Error::Sha256Digest),
-        };
-
-        let request = Request(RequestKind::FileMetadata { file_name, sha256 });
-
-        side.send_request(request).await?;
-
-        // Send the file content
-        let file_length = metadata.len();
-
-        let mut buf = vec![0; Self::CONTENT_FARGMENT_MAX_BYTES];
-        let mut read_bytes = 0;
-        let mut handler = file.take(Self::CONTENT_FARGMENT_MAX_BYTES as u64);
-
-        while read_bytes < file_length {
-            let read = handler.read(&mut buf)? as u64;
-            read_bytes += read;
-
-            let request = Request(RequestKind::FileFragment {
-                offset: read_bytes,
-                data: buf.clone(),
-            });
-
-            side.send_request(request).await?;
-        }
-
-        // Send the end of file
-        let request = Request(RequestKind::EndOfFile);
-        side.send_request(request).await?;
-
-        Ok(())
-    }
-
     #[instrument(skip(self))]
     pub async fn get_devices(&self) -> HashSet<SocketAddr> {
         loop {
@@ -130,6 +78,7 @@ mod test {
     use crate::utils::u64_to_u8_array;
 
     use super::*;
+    use crate::side::Side;
 
     /// Test process
     /// 1. Scan devices
@@ -147,38 +96,9 @@ mod test {
         let devices = master.get_devices().await;
         let device = devices.iter().next()?;
 
-        master.send_a_file(device, file);
+        let tcp: Side = TcpStream::connect(device).await?.into();
 
-        Ok(())
-    }
-
-    #[test]
-    // cargo test max --lib -- --show-output
-    fn test_max_cap() -> AnyResult<()> {
-        let file = PathBuf::from("Cargo.toml");
-        let file = File::open(file)?;
-
-        let file_length = file.metadata()?.len();
-
-        let mut content_fargment_max_bytes = 0;
-        while content_fargment_max_bytes < 1498 {
-            content_fargment_max_bytes += 1;
-
-            let mut buf = vec![0; content_fargment_max_bytes];
-
-            let request = Request(RequestKind::FileFragment {
-                offset: 114514,
-                data: buf.clone(),
-            });
-
-            let data = bincode::serialize(&request)?;
-            let data_len = data.len();
-
-            if data_len > 1498 {
-                println!("Max cap is {}", content_fargment_max_bytes - 1);
-                break;
-            }
-        }
+        tcp.send_a_file(file);
 
         Ok(())
     }
