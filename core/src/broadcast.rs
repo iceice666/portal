@@ -9,6 +9,7 @@ use crate::utils::{u16_to_u8_array, u8_array_to_u16};
 
 const MAGIC: [u8; 7] = [0xB, 0x2D, 0xE, 0x13, 0x13, 0x8, 0xA];
 
+#[derive(Debug)]
 pub struct Sender {
     socket: UdpSocket,
     payload: Vec<u8>,
