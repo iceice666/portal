@@ -1,8 +1,6 @@
-use thiserror::Error;
-
 pub type CrateResult<T = ()> = Result<T, Error>;
 
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("Invalid input. Please try again.")]
     InvalidInput,

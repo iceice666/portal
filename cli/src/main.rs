@@ -46,18 +46,11 @@ async fn main() -> AnyResult {
             }
         };
 
-        let res = manager.dispatch(cmd).await;
-
-        if res.is_ok() {
-            continue;
+        match manager.dispatch(cmd).await {
+            Ok(_) => {}
+            Err(Error::Exit) => break,
+            Err(e) => e.handle(),
         }
-
-        let error = res.unwrap_err();
-        error.handle();
-
-        if matches!(error, Error::Exit) {
-            break;
-        };
     }
 
     Ok(())
