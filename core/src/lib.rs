@@ -25,5 +25,6 @@
 
 pub mod broadcast;
 pub mod error;
+pub mod master;
 pub mod side;
 mod utils;

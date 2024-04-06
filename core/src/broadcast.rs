@@ -38,6 +38,7 @@ impl Sender {
         })
     }
 
+    #[instrument(skip(self))]
     pub fn send_loop(&self, period: Duration) -> io::Result<()> {
         loop {
             self.send_once()?;
@@ -45,6 +46,7 @@ impl Sender {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn async_send_loop(&self, period: Duration) -> io::Result<()> {
         loop {
             self.send_once()?;
@@ -90,7 +92,7 @@ impl Listener {
         let mut buffer = [0; 1024];
 
         loop {
-            let (len, source) = self.socket.recv_from(&mut buffer).map_err(|e| {
+            let (_len, source) = self.socket.recv_from(&mut buffer).map_err(|e| {
                 io::Error::new(e.kind(), format!("Failed to receive broadcast: {}", e))
             })?;
             debug!("Received broadcast from {}", source.ip(),);
