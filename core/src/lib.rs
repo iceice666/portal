@@ -24,7 +24,9 @@
 //!               ||                             ||
 
 pub mod broadcast;
+pub mod codec;
 pub mod error;
 pub mod master;
-pub mod side;
+pub mod slave;
 mod utils;
+

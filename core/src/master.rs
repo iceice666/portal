@@ -1,23 +1,21 @@
-use std::{
-    fs::File,
-    io::{self, Read},
-    path::PathBuf,
-    time::Duration,
-};
+use std::{fs::File, io::Read, path::PathBuf, time::Duration};
 
 use futures::{SinkExt, StreamExt};
-use log::{debug, error};
-use tokio::net::{
-    tcp::{OwnedReadHalf, OwnedWriteHalf},
-    TcpStream,
-};
+use log::{debug, error, warn};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::{
+    net::{
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
+        TcpStream,
+    },
+    sync::mpsc::error::TryRecvError,
+};
 use tokio_util::codec::{FramedRead, FramedWrite};
 use tracing::instrument;
 
 use crate::{
+    codec::{MasterRequest, RequestCodec, ResponseCodec, SlaveResponse, MAX_FILE_FARGMENT_SIZE},
     error::{CrateResult, Error},
-    side::{Request, RequestCodec, Response, ResponseCodec, MAX_FILE_FARGMENT_SIZE},
 };
 
 #[derive(Debug)]
@@ -40,11 +38,37 @@ pub struct Master {
 impl Master {
     /// Send a request.
     #[inline]
-    async fn send_request(&mut self, request: Request) -> CrateResult {
+    async fn send_request(&mut self, request: MasterRequest) -> CrateResult {
         self.sender.feed(request).await?;
+        self.sender.flush().await?;
         Ok(())
     }
 
+    pub async fn close(&mut self) -> CrateResult {
+        self.sender.close().await?;
+        Ok(())
+    }
+
+    /// Keep receiving responses until the connection is closed.
+    /// Using a channel to receive remote responses.
+    pub(crate) async fn recv_responses(
+        &mut self,
+        msg_tx: UnboundedSender<SlaveResponse>,
+    ) -> CrateResult {
+        while let Some(resp) = self.receiver.next().await {
+            let resp = resp?;
+            debug!("Received response: {:#?}", resp);
+
+            if msg_tx.send(resp).is_err() {
+                debug!("Receiver dropped, quitting");
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Master {
     /// Create a async task to send a file to the remote.
     ///
     /// # Argments
@@ -78,7 +102,7 @@ impl Master {
     ///
     /// # Returns
     /// * A result of this sending file task.
-    #[instrument(skip(self))]
+    #[instrument(skip(self, rx))]
     async fn do_send_a_file(
         &mut self,
         path: PathBuf,
@@ -89,7 +113,7 @@ impl Master {
             None => "Untitled".to_string(),
         };
 
-        let file = File::open(path.clone())?;
+        let mut file = File::open(path.clone())?;
         let metadata = file.metadata()?;
 
         if !metadata.is_file() {
@@ -106,25 +130,40 @@ impl Master {
         let file_id = u8::from_str_radix(&sha256[0..=1], 16).unwrap_or(255);
 
         // Tell the remote we are going to send a file
-        let request = Request::FileMetadata {
+        let request = MasterRequest::FileMetadata {
             file_id,
             file_name,
             sha256,
         };
+        debug!("Sending file metadata: {:#?}", request);
         self.send_request(request).await?;
 
         // Init
         let file_length = metadata.len();
+        debug!("File length: {}", file_length);
+
         let mut buf = vec![0; MAX_FILE_FARGMENT_SIZE];
         let mut read_bytes = 0;
-        let mut handler = file.take(MAX_FILE_FARGMENT_SIZE as u64);
         let mut status = TaskStatus::Running;
+        let mut fragment_index = 0;
+        debug!("Prepare to send file");
 
         while read_bytes < file_length {
             // Update current status
-            if let Some(v) = rx.recv().await {
-                status = v;
+            match rx.try_recv() {
+                Ok(v) => status = v,
+                Err(TryRecvError::Empty) => {}
+                // Status channel is closed
+                // We should drop the file and return
+                Err(TryRecvError::Disconnected) => {
+                    warn!("Status channel is closed, aborting. (file_id: {})", file_id);
+                    let request = MasterRequest::DropFile { file_id };
+                    self.send_request(request).await?;
+                    return Ok(());
+                }
             }
+
+            debug!("Current status: {:#?}", status);
 
             // Determine the next action
             // If the status is Paused, we sleep 1 sec and continue to the next loop
@@ -137,59 +176,53 @@ impl Master {
                     continue;
                 }
                 TaskStatus::Aborted => {
-                    let request = Request::DropFile { file_id };
+                    let request = MasterRequest::DropFile { file_id };
                     self.send_request(request).await?;
                     return Ok(());
                 }
             }
 
             // Read the file content
-            let read = handler.read(&mut buf)? as u64;
+            let read = file.read(&mut buf)? as u64;
+
+            // If the read is 0, we reach the end of the file
+            if read == 0 {
+                break;
+            }
+
             // Update counter
             read_bytes += read;
 
+            debug!(
+                "Read {} bytes from file. Total read {} bytes",
+                read, read_bytes
+            );
+
             // Build the request
-            let request = Request::FileFragment {
+            let request = MasterRequest::FileFragment {
                 file_id,
-                offset: read_bytes,
-                data: buf.clone(),
+                index: fragment_index,
+                data: buf[0..read as usize].to_vec(),
             };
             // Send
             self.send_request(request).await?;
+
+            fragment_index += 1;
+            debug!("Next fragment index: {}", fragment_index);
         }
 
         // Send the end of file
-        let request = Request::EndOfFile { file_id };
+        let request = MasterRequest::EndOfFile { file_id };
         self.send_request(request).await?;
+        debug!("End of this file sending");
 
         Ok(())
     }
 
     #[instrument(skip(self))]
     pub async fn ping(&mut self) -> CrateResult {
-        self.send_request(Request::Ping).await?;
+        self.send_request(MasterRequest::Ping).await?;
 
-        Ok(())
-    }
-}
-
-// receive
-impl Master {
-    /// Keep receiving responses until the connection is closed.
-    /// Using a channel to receive remote responses.
-    pub(crate) async fn recv_responses(
-        &mut self,
-        msg_tx: UnboundedSender<Response>,
-    ) -> CrateResult {
-        while let Some(resp) = self.receiver.next().await {
-            let resp = resp?;
-            debug!("Received response: {:#?}", resp);
-
-            if msg_tx.send(resp).is_err() {
-                debug!("Receiver dropped, quitting");
-                break;
-            }
-        }
         Ok(())
     }
 }
@@ -239,8 +272,8 @@ mod test {
 
             let mut buf = &raw_data[0..content_fargment_max_bytes];
 
-            let request = Request::FileFragment {
-                offset: 114514,
+            let request = MasterRequest::FileFragment {
+                index: 0,
                 data: buf.to_vec(),
                 file_id: 0,
             };
