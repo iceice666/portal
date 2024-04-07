@@ -12,7 +12,10 @@ pub enum MasterRequest {
     Ping,
     // file fragment data
     FileFragment {
+        // u8::MAX = 255
+        // I think this smaal tool don't have ability to send 255 files at the same time
         file_id: u8,
+
         // A 1 GiB has 1073741824 bytes
         // A fragment has 1477 bytes
         // 1073741824 / 1477 = 727051.5 -> 727052 < u32::MAX = 4_294_967_295
@@ -35,6 +38,8 @@ pub enum MasterRequest {
     DropFile {
         file_id: u8,
     },
+    // Planned:
+    // OpenUrl
 }
 
 #[derive(Debug, Serialize, Deserialize)]

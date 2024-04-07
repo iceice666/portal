@@ -5,5 +5,5 @@ license = "MIT"
 edition = "2021"
 
 [workspace]
-members = ["core", "macro", "cli", "tui"]
+members = ["core", "cli", "tui"]
 resolver = "2"

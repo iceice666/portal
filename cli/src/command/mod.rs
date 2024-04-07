@@ -1,12 +1,13 @@
-use std::{sync::Arc, time::Duration};
+use std::{net::TcpStream, path::PathBuf, sync::Arc, time::Duration};
 
+use inquire::Select;
 use portal_core::{
     broadcast::{Listener, Sender},
-    error::CrateResult,
-    side::TcpConnection,
+    master::{Master, TaskStatus},
 };
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
-use crate::error::Error;
+use crate::error::{CrateResult, Error};
 
 type AnyResult<T = ()> = anyhow::Result<T>;
 
@@ -55,7 +56,8 @@ cmd_opt!(
     Config: "Edit the configuration" ,
     ScanDevices: "Scan for devices" ,
     ListDevices: "List all devices" ,
-    MakeAvailable: "Make this device detectable by others in 1 minute" ,
+    MakeAvailable: "Make this device detectable" ,
+    SetTarget: "Set the target device"
     SendFile: "Send a file to a device" ,
     PauseTask: "Pause a task" ,
     ResumeTask: "Resume a task" ,
@@ -63,11 +65,13 @@ cmd_opt!(
     ListTask: "List all tasks" ,
 );
 
+#[derive(Debug)]
 pub(crate) struct Manager {
     broadcast_sender: Arc<Sender>,
     broadcast_listener: Listener,
-    master: Option<TcpConnection>,
-    slaves: Vec<TcpConnection>,
+    master: Option<Master>,
+    slaves: Vec<Master>,
+    task: Vec<(UnboundedSender<TaskStatus>, UnboundedReceiver<CrateResult>)>,
 }
 
 impl Manager {
@@ -84,6 +88,7 @@ impl Manager {
             broadcast_sender,
             master: None,
             slaves: Vec::new(),
+            task: Vec::new(),
         })
     }
 
@@ -102,7 +107,7 @@ impl Manager {
     }
 
     #[async_recursion::async_recursion]
-    pub async fn dispatch(&mut self, cmd: MainCommand) -> Result<(), Error> {
+    pub async fn dispatch<'a>(&'a mut self, cmd: MainCommand) -> CrateResult {
         match cmd {
             MainCommand::Exit => Err(Error::Exit),
             MainCommand::Config => {
@@ -145,11 +150,40 @@ impl Manager {
                     .await;
                 });
 
+                println!("This device is now detectable by other devices in 60 secs.");
+
                 Ok(())
             }
 
             MainCommand::SendFile => {
-                todo!();
+                let path = PathBuf::from("Cargo.toml");
+
+                while self.master.is_none() {
+                    self.dispatch(MainCommand::SetTarget).await?;
+                }
+
+                let _ = self.master.as_mut().unwrap().send_a_file(path).await;
+
+                Ok(())
+            }
+            MainCommand::SetTarget => {
+                let devices = &self.broadcast_listener.scanned_devices;
+
+                if devices.is_empty() {
+                    println!("No devices found.");
+                    return Ok(());
+                }
+
+                let ans = Select::new(
+                    "Select a device to send the file to",
+                    devices.iter().collect(),
+                )
+                .prompt()
+                .map_err(|_| Error::InvalidInput)?;
+
+                // self.master = Some(TcpStream::connect(ans)?.try_into()?);
+
+                Ok(())
             }
             MainCommand::PauseTask => {
                 todo!();
