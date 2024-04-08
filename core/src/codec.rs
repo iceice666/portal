@@ -13,7 +13,7 @@ pub enum MasterRequest {
     // file fragment data
     FileFragment {
         // u8::MAX = 255
-        // I think this smaal tool don't have ability to send 255 files at the same time
+        // I think this small tool don't have ability to send 255 files at the same time
         file_id: u8,
 
         // A 1 GiB has 1073741824 bytes
