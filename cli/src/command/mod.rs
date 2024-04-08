@@ -1,4 +1,4 @@
-use std::{net::TcpStream, path::PathBuf, sync::Arc, time::Duration};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 
 use inquire::Select;
 use portal_core::{
@@ -53,7 +53,7 @@ macro_rules! cmd_opt {
 cmd_opt!(
     MainCommand,
     Exit: "Exit the program",
-    Config: "Edit the configuration" ,
+    EditConfig: "Edit the configuration" ,
     ScanDevices: "Scan for devices" ,
     ListDevices: "List all devices" ,
     MakeAvailable: "Make this device detectable" ,
@@ -71,7 +71,7 @@ pub(crate) struct Manager {
     broadcast_listener: Listener,
     master: Option<Master>,
     slaves: Vec<Master>,
-    task: Vec<(UnboundedSender<TaskStatus>, UnboundedReceiver<CrateResult>)>,
+    task: HashMap<String, (UnboundedSender<TaskStatus>, UnboundedReceiver<CrateResult>)>,
 }
 
 impl Manager {
@@ -88,7 +88,7 @@ impl Manager {
             broadcast_sender,
             master: None,
             slaves: Vec::new(),
-            task: Vec::new(),
+            task: HashMap::new(),
         })
     }
 
@@ -107,19 +107,20 @@ impl Manager {
     }
 
     #[async_recursion::async_recursion]
-    pub async fn dispatch<'a>(&'a mut self, cmd: MainCommand) -> CrateResult {
+    pub async fn dispatch(&'static self, cmd: MainCommand) -> CrateResult {
         match cmd {
             MainCommand::Exit => Err(Error::Exit),
-            MainCommand::Config => {
+            MainCommand::EditConfig => {
                 todo!();
             }
 
             MainCommand::ScanDevices => {
-                self.broadcast_listener.scan_device()?;
+                println!("Scanning devices in 30 secs...");
+
+                self.broadcast_listener
+                    .async_scan_device(Duration::from_secs(30));
 
                 println!("Scanning complete.");
-
-                self.dispatch(MainCommand::ListDevices).await?;
 
                 Ok(())
             }
@@ -142,6 +143,11 @@ impl Manager {
             MainCommand::MakeAvailable => {
                 let sender = Arc::clone(&self.broadcast_sender);
 
+                // let _ = tokio::time::timeout(
+                //     Duration::from_secs(60),
+                //     sender.async_send_loop(Duration::from_secs(1)),
+                // )
+                // .await;
                 tokio::spawn(async move {
                     let _ = tokio::time::timeout(
                         Duration::from_secs(60),
@@ -158,12 +164,11 @@ impl Manager {
             MainCommand::SendFile => {
                 let path = PathBuf::from("Cargo.toml");
 
-                while self.master.is_none() {
-                    self.dispatch(MainCommand::SetTarget).await?;
+                if self.master.is_none() {
+                    println!("You have to set target first!");
+                } else {
+                    let _ = self.master.as_mut().unwrap().send_a_file(path).await;
                 }
-
-                let _ = self.master.as_mut().unwrap().send_a_file(path).await;
-
                 Ok(())
             }
             MainCommand::SetTarget => {

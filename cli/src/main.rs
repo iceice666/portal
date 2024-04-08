@@ -2,6 +2,7 @@ use crate::command::MainCommand;
 use command::Manager;
 use error::Error;
 use inquire::Select;
+use tracing::level_filters::LevelFilter;
 
 type AnyResult<T = ()> = anyhow::Result<T>;
 
@@ -10,7 +11,10 @@ mod error;
 
 #[tokio::main]
 async fn main() -> AnyResult {
-    tracing_subscriber::fmt::init();
+    // #[cfg(debug_assertions)]
+    // tracing_subscriber::fmt()
+    //     .with_max_level(LevelFilter::DEBUG)
+    //     .init();
 
     let service_port = portpicker::pick_unused_port().expect("No ports available");
     let broadcast_port = portpicker::pick_unused_port().expect("No ports available");
@@ -48,7 +52,10 @@ async fn main() -> AnyResult {
 
         match manager.dispatch(cmd).await {
             Ok(_) => {}
-            Err(Error::Exit) => break,
+            Err(e @ Error::Exit) => {
+                e.handle();
+                break;
+            }
             Err(e) => e.handle(),
         }
     }

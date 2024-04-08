@@ -75,7 +75,7 @@ impl Listener {
     pub fn new(listening_port: u16) -> io::Result<Self> {
         let socket = UdpSocket::bind(format!("0.0.0.0:{}", listening_port))?;
         socket.set_broadcast(true)?;
-        socket.set_read_timeout(Some(Duration::from_secs(60)))?;
+        socket.set_read_timeout(Some(Duration::from_secs(30)))?;
 
         let scanned_devices = HashSet::new();
 
@@ -115,28 +115,55 @@ impl Listener {
 
         Ok(())
     }
+
+    #[instrument(skip(self))]
+    pub fn async_scan_device(&'static mut self, duration: Duration) -> io::Result<()> {
+        tokio::spawn(tokio::time::timeout(duration, async {
+            loop {
+                match self.recv_once() {
+                    Err(_) => continue,
+                    Ok(addr) => self.scanned_devices.insert(addr),
+                };
+            }
+        }));
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod test {
     use std::{thread::sleep, time::Duration};
 
+    use log::debug;
+    use tracing::level_filters::LevelFilter;
+
     use super::{Listener, Sender};
     type AnyResult<T = ()> = anyhow::Result<T>;
     #[test]
     fn test() -> AnyResult {
-        tracing_subscriber::fmt::init();
+        tracing_subscriber::fmt()
+            .with_max_level(LevelFilter::DEBUG)
+            .init();
 
         let service_port = portpicker::pick_unused_port().expect("No ports available");
         let broadcast_port = portpicker::pick_unused_port().expect("No ports available");
 
+        debug!(
+            "service port: {}, broadcast port: {}",
+            service_port, broadcast_port
+        );
+
         let sender = Sender::new(service_port, broadcast_port)?;
         let listener = Listener::new(broadcast_port)?;
 
-        std::thread::spawn(move || sender.send_loop(std::time::Duration::from_secs(1)));
+        std::thread::spawn(move || {
+            debug!("Sending broadcast package...");
+            sender.send_loop(std::time::Duration::from_secs(1))
+        });
 
         sleep(Duration::from_secs(5));
         let addr = listener.recv_once()?;
+
         assert_eq!(addr.port(), service_port);
 
         Ok(())
